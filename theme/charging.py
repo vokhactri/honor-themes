@@ -63,6 +63,9 @@ INPUTS = (
 )
 PACKAGES = ('av', 'lz4', 'numpy', 'pillow', 'resvg-py')
 BOLT = (26, 67)  # the lightning icon, as in 荣耀机器人
+# The player puts % GAP px after the level only while a centered "90.01" can't overlap a % centered on x. When they
+# overlap, it slides % left half a digit per missing char, which lands it on "72". x="900" keeps them apart.
+GAP = 12  # px between the battery level and %
 CONFIG = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <ChargingConfig>
   <version>2.0.0</version>
@@ -71,7 +74,7 @@ CONFIG = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <background_color>#D9000000</background_color>
   <lightning_icon x="540" y="1687" w="104" h="104" path="./lightning.png"/>
   <progress_text content="72.70" x="540" y="1836" size="122" color="#FFFFFFFF" path=""/>
-  <percentage_text content="%" x="735" y="1858" x_rel="4" size="50" color="#ffffffff" path=""/>
+  <percentage_text content="%" x="900" y="1858" x_rel="{GAP}" size="50" color="#ffffffff" path=""/>
   <charging_prompt_texts>
     <level0 content="Fast charging" x="540" y="1945" size="45" color="#87FFFFFF" path=""/>
     <level1 content="SuperCharge" x="540" y="1945" size="45" color="#87FFFFFF" path=""/>
@@ -154,9 +157,9 @@ def mockup(fs: list[Image.Image], dst: Path) -> None:
     bg.alpha_composite(b, (540 - b.width // 2, 1687 - b.height // 2))
     d = ImageDraw.Draw(bg)
     d.text((540, 1836), '72', fill='white', font=previews.font(122, True), anchor='mm')
-    # x_rel: the % sign follows the level, 4px after it
-    right = d.textbbox((540, 1836), '72', font=previews.font(122, True), anchor='mm')[2]
-    d.text((right + 4, 1858), '%', fill='white', font=previews.font(50, True), anchor='lm')
+    # x_rel: like the player, % starts GAP px after the level's advance width, not its ink
+    right = 540 + d.textlength('72', font=previews.font(122, True)) / 2
+    d.text((right + GAP, 1858), '%', fill='white', font=previews.font(50, True), anchor='lm')
     d.text((540, 1945), 'Fast charging', fill=(255, 255, 255, 0x87), font=previews.font(45), anchor='mm')
     shots = []
     for f in fs + fs[INIT:]:
