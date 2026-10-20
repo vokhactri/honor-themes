@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 # Pinned to the versions that rendered the approved icons. Newer releases can shift resampling and colors.
 dependencies = [
     "av==19.0.1",
+    "fonttools==4.67.0",
     "lz4==4.4.5",
     "numpy==2.5.4",
     "pillow==12.3.0",

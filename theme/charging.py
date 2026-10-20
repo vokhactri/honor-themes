@@ -30,11 +30,13 @@ import numpy as np
 import numpy.typing as npt
 import resvg_py
 from av.video.reformatter import ColorRange, Colorspace
-from PIL import Image, ImageDraw
+from fontTools import subset
+from fontTools.ttLib import TTFont
+from PIL import Image, ImageDraw, ImageFont
 
 from . import fingerprint, previews
 from .fingerprint import RED, WHITE, blur, ease
-from .paths import BUILD, ROOT
+from .paths import BUILD, DATA, ROOT
 
 type Mask = npt.NDArray[np.float64]  # alpha 0..1
 
@@ -50,7 +52,7 @@ GOP = 30  # a key frame every second, so the loop starts on one
 MAGIC = b'HonorPrivateData' + bytes([0, 1, 0, 0, 0, 0, 0, 0])
 STRIDE = 544  # bytes per alpha row
 CACHE = BUILD / 'charging/cache'
-NAMES = ('charging_config.xml', 'contentLang.xml', 'lightning.png', 'charging_video.mp4')
+NAMES = ('charging_config.xml', 'contentLang.xml', 'lightning.png', 'digits.ttf', 'charging_video.mp4')
 # what the module depends on: this code, the XANA symbol, the review GIF's wallpaper and fonts, and the packages that
 # draw and encode it (their versions decide the video's bytes)
 INPUTS = (
@@ -61,10 +63,13 @@ INPUTS = (
     'data/fingerprint',
     'data/inter',
 )
-PACKAGES = ('av', 'lz4', 'numpy', 'pillow', 'resvg-py')
+PACKAGES = ('av', 'fonttools', 'lz4', 'numpy', 'pillow', 'resvg-py')
 BOLT = (26, 67)  # the lightning icon, as in 荣耀机器人
-# The player puts % GAP px after the level only while a centered "90.01" can't overlap a % centered on x. When they
-# overlap, it slides % left half a digit per missing char, which lands it on "72". x="900" keeps them apart.
+# The player places the level and % by measuring "9", "90", "100", "9.01" and "90.01", not the level it shows. In a
+# font with proportional digits "32.30" is wider than "90.01" and runs into %, so the level uses digits.ttf, where
+# every digit has the same width. % sits GAP px after the level only while a centered "90.01" can't overlap a %
+# centered on x. When they overlap, the player slides % left half a digit per missing char, which lands it on "72".
+# x="900" keeps them apart.
 GAP = 12  # px between the battery level and %
 CONFIG = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <ChargingConfig>
@@ -73,8 +78,8 @@ CONFIG = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <video_framerate framerate="{FPS}"/>
   <background_color>#D9000000</background_color>
   <lightning_icon x="540" y="1687" w="104" h="104" path="./lightning.png"/>
-  <progress_text content="72.70" x="540" y="1836" size="122" color="#FFFFFFFF" path=""/>
-  <percentage_text content="%" x="900" y="1858" x_rel="{GAP}" size="50" color="#ffffffff" path=""/>
+  <progress_text content="72.70" x="540" y="1836" size="122" color="#FFFFFFFF" path="./digits.ttf"/>
+  <percentage_text content="%" x="900" y="1858" x_rel="{GAP}" size="50" color="#ffffffff" path="./digits.ttf"/>
   <charging_prompt_texts>
     <level0 content="Fast charging" x="540" y="1945" size="45" color="#87FFFFFF" path=""/>
     <level1 content="SuperCharge" x="540" y="1945" size="45" color="#87FFFFFF" path=""/>
@@ -149,6 +154,26 @@ def bolt() -> Image.Image:
     return out
 
 
+def digits() -> bytes:
+    """digits.ttf: Inter Regular cut down to 0-9, the period and %, with the tabular digits in place of the default
+    ones. Kerning is dropped too, so a level's width depends only on its length."""
+    font = TTFont(DATA / 'inter/Inter-Regular.ttf', recalcTimestamp=False)
+    best = font.getBestCmap()
+    assert best is not None
+    tabular = {ord(c): best[ord(c)] + '.tf' for c in '0123456789'}
+    for table in font['cmap'].tables:
+        table.cmap.update({u: g for u, g in tabular.items() if u in table.cmap})
+    options = subset.Options()
+    options.layout_features = []
+    options.hinting = False
+    s = subset.Subsetter(options)
+    s.populate(text='0123456789.%')
+    s.subset(font)
+    out = io.BytesIO()
+    font.save(out)
+    return out.getvalue()
+
+
 def mockup(fs: list[Image.Image], dst: Path) -> None:
     """An animated GIF of the lock screen while charging: the turn, then the loop twice, at a third of the size."""
     bg = previews.view(W, H)
@@ -156,10 +181,13 @@ def mockup(fs: list[Image.Image], dst: Path) -> None:
     b = bolt()
     bg.alpha_composite(b, (540 - b.width // 2, 1687 - b.height // 2))
     d = ImageDraw.Draw(bg)
-    d.text((540, 1836), '72', fill='white', font=previews.font(122, True), anchor='mm')
+    ttf = digits()
+    level = ImageFont.truetype(io.BytesIO(ttf), 122, layout_engine=ImageFont.Layout.BASIC)
+    d.text((540, 1836), '72', fill='white', font=level, anchor='mm')
     # x_rel: like the player, % starts GAP px after the level's advance width, not its ink
-    right = 540 + d.textlength('72', font=previews.font(122, True)) / 2
-    d.text((right + GAP, 1858), '%', fill='white', font=previews.font(50, True), anchor='lm')
+    right = 540 + d.textlength('72', font=level) / 2
+    pct = ImageFont.truetype(io.BytesIO(ttf), 50, layout_engine=ImageFont.Layout.BASIC)
+    d.text((right + GAP, 1858), '%', fill='white', font=pct, anchor='lm')
     d.text((540, 1945), 'Fast charging', fill=(255, 255, 255, 0x87), font=previews.font(45), anchor='mm')
     shots = []
     for f in fs + fs[INIT:]:
@@ -323,7 +351,9 @@ def files() -> dict[str, bytes]:
         mockup(fs, review / 'mockup.gif')
     png = io.BytesIO()
     bolt().save(png, 'PNG')
-    out: dict[str, bytes] = dict(zip(NAMES, (CONFIG.encode(), LANG.encode(), png.getvalue(), video(fs)), strict=True))
+    out: dict[str, bytes] = dict(
+        zip(NAMES, (CONFIG.encode(), LANG.encode(), png.getvalue(), digits(), video(fs)), strict=True)
+    )
     # write to a new directory and rename it into place, so a build never reads a half-written cache
     CACHE.mkdir(exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix='.', dir=CACHE))
