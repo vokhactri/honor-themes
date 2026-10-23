@@ -9,6 +9,7 @@ OVERRIDES: dict[str, App] = {
     'app.devswitch': App(specks=False),  # keep the dashed link between the antennae
     'app.revanced.android.youtube': App(recolor=None),
     'app.revanced.manager.flutter': App(frac=0.60),
+    'ch.duartesantos.opengym': App(recolor=None),
     'com.alibaba.aliexpresshd': App(recolor=None),
     'com.android.vending': App(recolor=None, frac=0.72),
     'com.bachhoaxanh': App(recolor=None),
@@ -44,6 +45,7 @@ OVERRIDES: dict[str, App] = {
     'com.lazada.android': App(recolor=None),
     'com.linkedin.android': App(recolor=None),
     'com.mbmobile': App(recolor=None),
+    'com.microsoft.office.outlook': App(recolor=None),
     'com.msb.digibank.retail': App(recolor=None),
     'com.mservice.momotransfer': App(key='white', recolor=(235, 40, 150), frac=0.62),
     'com.ocb.liobank': App(recolor=None, frac=0.543, dx=0.017, dy=-0.035),
@@ -61,6 +63,7 @@ OVERRIDES: dict[str, App] = {
     'com.vnid': App(recolor=None, frac=0.74, dy=-0.02),
     'com.vnp.myvinaphone': App(recolor=None),
     'com.x8bit.bitwarden': App(recolor=None),
+    'com.zarz.mornye': App(recolor=None),
     'com.zing.zalo': App(recolor=None, frac=0.8925, dx=0.0525, dy=-0.0569),
     'de.mobileconcepts.cyberghost': App(recolor=None),
     'dev.anilbeesetti.nextplayer': App(recolor=None, frac=0.46, dx=0.045),
