@@ -203,13 +203,13 @@ CAP = -font(100).getbbox('H', anchor='ls')[1] / (100 * S)  # cap height, in em
 TRACK = -0.04  # letter spacing in em: Inter is wider than Honor's condensed status bar font
 
 
-def text(m: Mask, s: str, x: float, cap_top: float, cap: float) -> tuple[Mask, float]:
+def text(m: Mask, s: str, x: float, cap_top: float, cap: float, track: float = TRACK) -> tuple[Mask, float]:
     """Set s with its cap height `cap` px and caps starting at cap_top; returns the mask and the right edge."""
     f = font(cap / CAP)
     base = (cap_top + cap) * S
     xs = [x * S]
     for c in s[:-1]:
-        xs.append(xs[-1] + f.getlength(c) + TRACK * f.size)
+        xs.append(xs[-1] + f.getlength(c) + track * f.size)
 
     def run(d: ImageDraw.ImageDraw) -> None:
         for c, cx in zip(s, xs, strict=True):
@@ -513,7 +513,99 @@ def standalone(glyph: str, w: float, check: bool = False) -> Mask:
     return out
 
 
-# --- calling: a filled tag with the text knocked out (VoLTE, HD...), and the SIM numbers next to it
+# --- calling: VoLTE and the like drawn as One UI does, "Vo" with two waves over the rest of the word and the SIM number
+# right after it ("Vo)) / LTE1"); HD and WLAN keep a filled tag with the text knocked out
+#
+# SystemUI puts the SIM number in its own drawable right of the tag, and the same number drawables follow VoLTE and HD.
+# With one SIM it shows *_superscript_icon1 or 2, with both on the same kind *_superscript_icon_double (1 over 2).
+
+CALL_CAP = 17  # cap height of each line, the SIM numbers' too
+CALL_GAP = 0.32  # between the two lines, in caps
+CALL_TRACK = -0.06  # One UI sets these tighter than the network types
+WAVE = 0.17  # stroke of the waves, in caps: about the letters' stems
+RING = 0.18  # from the o to the first wave and between the waves, in caps
+EDGE = 0.5  # the tag's ink ends this far from its right edge
+
+
+def call_rows(h: float) -> tuple[float, float, float]:
+    """(cap, top of line 1, top of line 2) for a 60px canvas, scaled for the 36px ones."""
+    cap = CALL_CAP * h / H
+    top1 = (h - cap * (2 + CALL_GAP)) / 2
+    return cap, top1, top1 + cap * (1 + CALL_GAP)
+
+
+def ink(a: Mask, axis: int = 0) -> tuple[float, float]:
+    """The first and last px with ink, columns by default, rows with axis=1."""
+    idx = np.nonzero(a.max(axis) > 0.5)[0]
+    return idx.min() / S, (idx.max() + 1) / S
+
+
+def shifted(a: Mask, dx: float) -> Mask:
+    return np.roll(a, round(dx * S), axis=1)
+
+
+def waves(m: Mask, cx: float, cy: float, radii: Sequence[float], sw: float, span: float) -> Mask:
+    """Arcs of these radii around (cx, cy), sw px thick with round ends, opening right over +-span degrees."""
+
+    def run(d: ImageDraw.ImageDraw) -> None:
+        for r in radii:
+            o = (r + sw / 2) * S
+            d.arc((cx * S - o, cy * S - o, cx * S + o, cy * S + o), -span, span, fill=255, width=round(sw * S))
+            for t in np.radians((-span, span)):
+                x, y = cx + r * np.cos(t), cy + r * np.sin(t)
+                d.ellipse(((x - sw / 2) * S, (y - sw / 2) * S, (x + sw / 2) * S, (y + sw / 2) * S), fill=255)
+
+    return draw(m, run)
+
+
+def vo(w: float, h: float, rest: str) -> Mask:
+    """Vo with two waves around the o over `rest`. The second line ends at the right edge so the SIM number follows
+    it like a letter; the first is centered over it but stops at that edge too."""
+    m = blank(w, h)
+    cap, top1, top2 = call_rows(h)
+    a = text(m, 'Vo', 0, top1, cap, CALL_TRACK)[0]
+    left = ink(a)[0]
+    f = font(cap / CAP)
+    o = text(m, 'o', (f.getlength('V') + CALL_TRACK * f.size) / S, top1, cap, CALL_TRACK)[0]
+    (ol, or_), (ot, ob) = ink(o), ink(o, 1)
+    cx, cy = (ol + or_) / 2, (ot + ob) / 2
+    sw = WAVE * cap
+    r1 = (or_ - ol) / 2 + RING * cap + sw / 2
+    r2 = r1 + sw + RING * cap
+    # as tall as One UI's, unless the outer wave would come within 1.5px of the second line
+    span = min(40, np.degrees(np.arcsin(min(1, (top2 - 1.5 - sw / 2 - cy) / r2))))
+    a = np.maximum(a, waves(m, cx, cy, (r1, r2), sw, span))
+    b = text(m, rest, 0, top2, cap, CALL_TRACK)[0]
+    bl, br = ink(b)
+    b = shifted(b, w - EDGE - br)
+    right = ink(a)[1]
+    dx = min((bl + br) / 2 + w - EDGE - br - (left + right) / 2, w - EDGE - right)
+    return np.maximum(shifted(a, dx), b)
+
+
+VO = {  # name: what goes under Vo
+    'ic_statusbar_volte': 'LTE',
+    'ic_statusbar_vo4g': '4G',
+    'ic_statusbar_vo5g': '5G',
+    'ic_statusbar_vonr': 'NR',
+    'ic_statusbar_vowifi': 'WiFi',
+    'ic_statusbar_voz4g': 'z4G',
+    'ic_statusbar_incall_double_volte': 'LTE',
+    'ic_statusbar_incall_double_vo5g': '5G',
+    'ic_statusbar_incall_double_vonr': 'NR',
+    'ic_statusbar_incall_double_vowifi': 'WiFi',
+}
+
+
+def sim_numbers(h: float, rows: Sequence[tuple[str, int]]) -> Mask:
+    """SIM numbers in their 19px canvas, ink from x=0.8: (digit, line 0 or 1) for each, set like the tag's lines."""
+    m = blank(19, h)
+    cap, *tops = call_rows(h)
+    out = np.zeros_like(m)
+    for d, row in rows:
+        a = text(m, d, 0, tops[row], cap, CALL_TRACK)[0]
+        out = np.maximum(out, shifted(a, 0.8 - ink(a)[0]))
+    return out
 
 
 def tag(w: float, h: float, top: float, bottom: float, main: str, sup: str = '') -> Mask:
@@ -539,24 +631,14 @@ def tag(w: float, h: float, top: float, bottom: float, main: str, sup: str = '')
 
 
 TAGS = {  # name: (canvas w, h, tag top, bottom, text)
-    'ic_statusbar_volte': (64, 60, 8, 52, ('VoLTE',)),
-    'ic_statusbar_vo4g': (58, 60, 8, 52, ('Vo4G',)),
-    'ic_statusbar_vo5g': (54, 60, 8, 52, ('Vo5G',)),
-    'ic_statusbar_vonr': (54, 60, 8, 52, ('VoNR',)),
-    'ic_statusbar_vowifi': (76, 60, 8, 52, ('VoWiFi',)),
-    'ic_statusbar_voz4g': (68, 60, 8, 52, ('Voz4G',)),
     'ic_statusbar_hd': (44, 60, 10, 50, ('HD',)),
     'ic_statusbar_hd_plus': (54, 60, 8, 52, ('HD', '+')),
     'ic_statusbar_hd_plus_cmcc': (44, 60, 8, 52, ('HD', '+')),
     'ic_statusbar_incall_wlan': (66, 60, 8, 52, ('WLAN',)),
     'stat_sys_hdlt': (60, 60, 8, 52, ('HD',)),
     'stat_sys_hd_plus': (65, 60, 8, 52, ('HD', '+')),
-    'ic_statusbar_incall_double_volte': (58, 36, 4, 32, ('VoLTE',)),
     'ic_statusbar_incall_double_hd': (68, 36, 5, 31, ('HD',)),
     'ic_statusbar_incall_double_hd_plus_cmcc': (68, 36, 5, 31, ('HD', '+')),
-    'ic_statusbar_incall_double_vo5g': (52, 36, 4, 32, ('Vo5G',)),
-    'ic_statusbar_incall_double_vonr': (52, 36, 4, 32, ('VoNR',)),
-    'ic_statusbar_incall_double_vowifi': (68, 36, 4, 32, ('VoWiFi',)),
     'ic_statusbar_incall_double_wlan': (59, 36, 4, 32, ('WLAN',)),
 }
 
@@ -566,15 +648,6 @@ def ethernet_alert() -> Mask:
     m = blank(53, 48)
     g = paste(m, symbol('settings_ethernet', w=44.5), 24, 24)  # the stock glyph spans x 1.75..46.25, y 11..37
     return np.maximum(g, bang(m, (49, 20, 53, 38), 4))  # the stock mark: 49..53, bar to 36, dot 40..44
-
-
-def digits(h: float, rows: list[tuple[str, float]]) -> Mask:
-    """SIM numbers in a 19px wide canvas: (digit, bottom of its caps) for each row, caps 17px tall from x=0."""
-    m = blank(19, h)
-    out = np.zeros_like(m)
-    for d, bottom in rows:
-        out = np.maximum(out, text(m, d, 0, bottom - 17, 17)[0])
-    return out
 
 
 # --- everything
@@ -605,11 +678,13 @@ def icons() -> dict[str, Image.Image]:
     out['stat_sys_data_fully_connected_lte_plus'] = png(fitted(m, 'LTE+', 1, 3, 8))
     for name, (w, h, top, bottom, parts) in TAGS.items():
         out[name] = png(tag(w, h, top, bottom, *parts))
-    out['ic_statusbar_superscript_double_icon1'] = png(digits(36, [('1', 30)]))
-    out['ic_statusbar_superscript_double_icon2'] = png(digits(36, [('2', 30)]))
-    out['ic_statusbar_superscript_icon1'] = png(digits(60, [('1', 50)]))
-    out['ic_statusbar_superscript_icon2'] = png(digits(60, [('2', 50)]))
-    out['ic_statusbar_superscript_icon_double'] = png(digits(60, [('1', 27), ('2', 50)]))
+    for name, rest in VO.items():
+        out[name] = png(vo(*SIZES[name], rest))
+    # a lone number sits on the second line (LTE1), both stack on the two lines
+    for h, prefix in ((36, 'ic_statusbar_superscript_double_icon'), (60, 'ic_statusbar_superscript_icon')):
+        out[f'{prefix}1'] = png(sim_numbers(h, [('1', 1)]))
+        out[f'{prefix}2'] = png(sim_numbers(h, [('2', 1)]))
+    out['ic_statusbar_superscript_icon_double'] = png(sim_numbers(60, [('1', 0), ('2', 1)]))
     out['ic_statusbar_wifi_giga'] = png(fitted(blank(12, 63), 'G', 0, 8, 18))
     m = blank(62)
     out['stat_sys_signal_five_null'] = png(np.maximum(bars(NULL5, 0, w=62), paste(m, symbol('close', w=16), 16, 16)))
